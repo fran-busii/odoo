@@ -1,4 +1,4 @@
-#!/home/franc/Odoo_18/odoo/venv-odo/bin/python
+#!/home/franc/Odoo_18/odoo/venv-odoo/bin/python
 # -*- coding: utf-8 -*-
 import re
 import sys
