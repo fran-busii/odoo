@@ -1,0 +1,183 @@
+# Get orders in "to invoice"
+orders = model.search([
+    ('state', 'in', ['sale', 'done']),
+    ('invoice_status', 'in', ['to invoice']),
+])
+
+# Get today's date
+today = datetime.date.today()
+invoice_date = (today.replace(day=1) + dateutil.relativedelta.relativedelta(months=1))
+
+log(f"Today + 1 month resolved as: {today}", level="info")
+
+# Build rental period for description
+first_day_of_month = invoice_date
+last_day_of_month = (first_day_of_month + dateutil.relativedelta.relativedelta(months=1)) - dateutil.relativedelta.relativedelta(days=1)
+
+# Group orders by customer
+orders_by_customer = {}
+for order in orders:
+    partner_id = order.partner_id.id
+    if partner_id not in orders_by_customer:
+        orders_by_customer[partner_id] = []
+    orders_by_customer[partner_id].append(order)
+
+invoice_model = env['account.move']
+
+# Get line filters
+rental_deposit = env['product.product'].search([('name', '=', 'Rental Deposit')], limit=1)
+recurring_product = env['product.product'].search([('name', '=', 'Recurring'), ('recurring_invoice', '=', True)], limit=1)
+rental_lines = env['sale.order.line'].search([('product_id.rent_ok', '=', True),('start_date', '!=', False),])
+rental_lines = rental_lines.product_id
+
+# Account categories
+warehouse_tag = env['product.tag'].search([('name', '=', 'Warehouse')], limit=1)
+boardroom_tag = env['product.tag'].search([('name', '=', 'Boardroom')], limit=1)
+office_tag = env['product.tag'].search([('name', '=', 'Office')], limit=1)
+parking_tag = env['product.tag'].search([('name', '=', 'Parking')], limit=1)
+
+warehouse_templates = env['product.template'].search([('product_tag_ids', 'in', warehouse_tag.ids)])
+boardroom_templates = env['product.template'].search([('product_tag_ids', 'in', boardroom_tag.ids)])
+office_templates = env['product.template'].search([('product_tag_ids', 'in', office_tag.ids)])
+parking_templates = env['product.template'].search([('product_tag_ids', 'in', parking_tag.ids)])
+
+warehouse = env['product.product'].search([('product_tmpl_id', 'in', warehouse_templates.ids)])
+boardroom = env['product.product'].search([('product_tmpl_id', 'in', boardroom_templates.ids)])
+office= env['product.product'].search([('product_tmpl_id', 'in', office_templates.ids)])
+parking = env['product.product'].search([('product_tmpl_id', 'in', parking_templates.ids)])
+
+# Generate invoices grouped by customer
+for partner_id, customer_orders in orders_by_customer.items():
+    partner = env['res.partner'].browse(partner_id)
+    log(f"Customer {partner.name} has {len(customer_orders)} orders ready to be invoiced: {[o.name for o in customer_orders]}", level='info')
+    
+    invoice_lines = []
+
+    for order in customer_orders:
+
+        recurring_price = 0
+      
+        if order.end_date and order.end_date <= invoice_date:
+          continue 
+        
+        if order.existing_order == False:
+          continue
+        
+        for line in order.order_line:
+            if line.product_id.id == recurring_product.id:
+                recurring_price = line.price_unit
+                continue
+
+        twentieth_of_month = today.replace(day=20)
+        
+        # Check if this specific order was already invoiced in the past month
+        recent_invoices = order.invoice_ids.filtered(
+            lambda inv: inv.date >= twentieth_of_month and inv.date <= invoice_date and inv.state in ['posted', 'open']
+        )
+
+        if recent_invoices:
+            log(f"Invoice for this month already created for order {order.name}", level="info")
+            continue
+
+
+        for line in order.order_line:
+
+            # Rental recurring line
+            if line.product_id in rental_lines:
+
+                account = False
+
+                if line.product_id in warehouse:
+                    account = env['account.account'].search([('code', '=', '1000001')], limit=1)
+                elif line.product_id in boardroom:
+                    account = env['account.account'].search([('code', '=', '1000002')], limit=1)
+                elif line.product_id in office:
+                    account = env['account.account'].search([('code', '=', '1000003')], limit=1)
+                elif line.product_id in parking:
+                    account = env['account.account'].search([('code', '=', '1000004')], limit=1)
+
+                if account:
+                  account_name = account.id 
+                else: 
+                  account_name = (
+                      recurring_product.property_account_income_id.id
+                      or recurring_product.categ_id.property_account_income_categ_id.id
+                      or self.env.company.income_currency_exchange_account_id.id
+                  )
+
+                log(f"Customer {partner.name} for {order.name} has this rental unit line: {line.product_id.name}.", level='info')
+                invoice_lines.append({
+                    'product_id': recurring_product.id,
+                    'name': f"[{line.product_template_id.default_code}] {line.product_template_id.name}  - 1 month {first_day_of_month.strftime('%Y/%m/%d')} to {last_day_of_month.strftime('%Y/%m/%d')}"
+                        if line.product_template_id.default_code else f"{line.product_template_id.name}  - 1 month {first_day_of_month.strftime('%Y/%m/%d')} to {last_day_of_month.strftime('%Y/%m/%d')}",
+                    'quantity': line.product_uom_qty,
+                    'price_unit': recurring_price,
+                    'sale_line_ids': [(6, 0, [line.id])],
+                    'account_id': account_name,
+                })
+                continue
+
+            # General invoiceable lines
+            if line.product_id.id != recurring_product.id:
+                if line.product_id.id == rental_deposit.id and order.existing_order:
+                    log(f"Customer {partner.name} has Rental Deposit for existing order {order.name} so this line is skipped.", level='info')
+                    continue
+                log(f"Adding general invoiceable line '{line.name}' from order {order.name}")
+                invoice_lines.append({
+                    'product_id': line.product_id.id,
+                    'name': f"[{line.product_template_id.default_code}] {line.product_template_id.name}" if line.product_template_id.default_code else line.product_template_id.name,
+                    'quantity': line.product_uom_qty,
+                    'price_unit': line.price_unit,
+                    'sale_line_ids': [(6, 0, [line.id])],
+                })
+
+    if not invoice_lines:
+        log(f"No invoiceable lines found for customer {partner.name}", level='info')
+        continue
+    
+    invoice_due_date = first_day_of_month
+    payment_term = order.payment_term_id
+    
+    # Check if payment term exists
+    if payment_term:
+        if payment_term.name.lower() == "end of month":
+            invoice_due_date = last_day_of_month
+        elif payment_term.name.lower() == "immediate payment":
+            invoice_due_date = first_day_of_month
+            
+    # Create the invoice
+    invoice = invoice_model.create({
+        'move_type': 'out_invoice',
+        'partner_id': partner.id,
+        'invoice_origin': ', '.join(order.name for order in customer_orders),
+        'invoice_date': first_day_of_month,
+        'invoice_date_due': invoice_due_date,
+        'invoice_payment_term_id': False, 
+    })
+
+
+    # Create invoice lines
+    for line_vals in invoice_lines:
+        line_vals.update({'move_id': invoice.id})
+        env['account.move.line'].create(line_vals)
+
+    # Post the invoice
+    invoice.action_post()
+    
+
+    # Update invoice status on orders and lines
+    for order in [o for o in customer_orders if o.existing_order and (not o.end_date or o.end_date > invoice_date)]:
+        order._compute_invoice_status()
+        order._update_next_invoice_date()
+        
+        for line in order.order_line:
+            line._compute_invoice_status()
+            line._compute_qty_invoiced()
+
+    # Email the invoice
+    template = env.ref('account.email_template_edi_invoice')
+    if template:
+        template.send_mail(invoice.id, force_send=True)
+
+    log(f"Created invoice {invoice.name} for customer {partner.name} ({len(customer_orders)} orders)", level='info')
+
