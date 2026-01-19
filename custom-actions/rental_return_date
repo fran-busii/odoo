@@ -1,0 +1,51 @@
+sale_orders = env['sale.order'].search([
+    ('state', 'not in', ['cancel', 'draft']),
+    ('is_subscription', '=', True),
+    ('is_notice_given', '=', False)
+])
+
+log(f"Found {len(sale_orders)} sale orders matching criteria.")
+
+for order in sale_orders:
+    log(f"Processing Sale Order: {order.name} (ID: {order.id})")
+    
+
+    last_invoice = order.invoice_ids.sorted(lambda inv: inv.invoice_date, reverse=True)[:1]
+    
+    if last_invoice:
+        invoice_date = last_invoice.invoice_date
+        log(
+            f"Last invoice for Sale Order {order.name} (ID: {order.id}) is {invoice_date} (ID: {last_invoice.id})"
+        )
+        
+        year = invoice_date.year
+        month = invoice_date.month
+   
+        # last_day = calendar.monthrange(year, month)[1]
+        # end_of_month = datetime(year, month, last_day)
+        # Use the datetime class from the datetime module
+        end_of_month = (datetime.datetime(year, month % 12 + 1, 1) - datetime.timedelta(days=1)) if month != 12 else datetime.datetime(year, 12, 31)
+
+
+        for line in order.order_line:
+            product = line.product_id
+        
+      
+            if not product.rent_ok:
+                continue
+        
+
+            category_name = product.categ_id.name or ""
+            if not any(word in category_name for word in ["Warehouse", "Boardroom", "Office", "Parking"]):
+                continue
+        
+  
+            line.write({'return_date': end_of_month})
+            log(f"Updated return_date to {end_of_month.strftime('%Y-%m-%d')} for order line {line.name} (ID: {line.id})")
+
+   
+        # updated_lines = order.order_line.write({'return_date': end_of_month})
+    else:
+        log(
+            f"No invoices found for Sale Order {order.name} (ID: {order.id}). Skipping return_date update."
+        )

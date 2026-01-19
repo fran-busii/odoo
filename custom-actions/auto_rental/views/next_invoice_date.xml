@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="sale_order_form_rental_next_invoice_date" model="ir.ui.view">
+        <field name="name">sale.order.form.rental.next.invoice.date</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale_subscription.sale_subscription_order_view_form"/>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            
+            <!-- ============================================ -->
+            <!-- 1. Fix next_invoice_date for NON-MANAGERS -->
+            <!-- ============================================ -->
+            <xpath expr="//field[@name='next_invoice_date'][@groups='!sales_team.group_sale_manager']" position="attributes">
+                <attribute name="invisible">not is_recurring_rental and (subscription_state not in ['3_progress', '4_paused'] or not plan_id)</attribute>
+                <attribute name="required">(plan_id or is_recurring_rental) and state == 'sale'</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 2. Show next_invoice_date for rental orders (MANAGERS) -->
+            <!-- ============================================ -->
+            <xpath expr="//field[@name='next_invoice_date'][@groups='sales_team.group_sale_manager']" position="attributes">
+                <attribute name="invisible">not is_recurring_rental and (subscription_state not in ['3_progress', '4_paused'] or not plan_id)</attribute>
+                <attribute name="required">(plan_id or is_recurring_rental) and state == 'sale'</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 3. Fix recurrence_id visibility (hide for rental) -->
+            <!-- ============================================ -->
+            <xpath expr="//field[@name='plan_id'][@groups='!sales_team.group_sale_manager']" position="attributes">
+                <attribute name="invisible">is_recurring_rental</attribute>
+                <attribute name="required">has_recurring_line and not is_recurring_rental</attribute>
+            </xpath>
+            
+            <xpath expr="//field[@name='plan_id'][@groups='sales_team.group_sale_manager']" position="attributes">
+                <attribute name="invisible">is_recurring_rental</attribute>
+                <attribute name="required">has_recurring_line and not is_recurring_rental</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 4. Fix the label and div containing plan_id -->
+            <!-- ============================================ -->
+            <xpath expr="//label[@name='plan_label']" position="attributes">
+                <attribute name="invisible">(not plan_id and not is_recurring_rental) and state in ['sale', 'cancel']</attribute>
+            </xpath>
+            
+            <xpath expr="//div[@name='plan_block']" position="attributes">
+                <attribute name="invisible">(not plan_id and not is_recurring_rental) and state in ['sale', 'cancel']</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 5. Fix end_date in plan_block -->
+            <!-- ============================================ -->
+            <xpath expr="//div[@name='plan_block']/field[@name='end_date']" position="attributes">
+                <attribute name="invisible">not plan_id or subscription_state == '7_upsell'</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 6. Fix start_date visibility in subscription_info group -->
+            <!-- ============================================ -->
+            <xpath expr="//group[@name='subscription_info']/field[@name='start_date'][@groups='!sales_team.group_sale_manager']" position="attributes">
+                <attribute name="readonly">subscription_state in ['2_renewal', '3_progress', '4_paused']</attribute>
+            </xpath>
+            
+            <xpath expr="//group[@name='subscription_info']/field[@name='start_date'][@groups='sales_team.group_sale_manager']" position="attributes">
+                <attribute name="readonly">subscription_state == '2_renewal'</attribute>
+            </xpath>
+            
+            <!-- ============================================ -->
+            <!-- 7. Make subscription_info group visible for rental -->
+            <!-- ============================================ -->
+            <xpath expr="//group[@name='subscription_info']" position="attributes">
+                <attribute name="invisible">not is_subscription and subscription_state != '7_upsell' and not is_recurring_rental</attribute>
+            </xpath>
+            
+        </field>
+    </record>
+</odoo>
