@@ -934,26 +934,18 @@ class SaleOrderLine(models.Model):
         string='Hold value of subscription',
     )
 
-    def _get_subscription_qty_invoiced(
-        self,
-        last_invoiced_date=None,
-        next_invoice_date=None,
-    ):
+    def _get_subscription_qty_invoiced(self, last_invoiced_date=None, next_invoice_date=None):
         """
         Bypass subscription quantity logic for recurring rental orders.
-        Must:
-        - Support multi-recordsets
-        - Support optional args (Odoo 18)
-        - Return {line_id: qty}
+        Version-agnostic: works with both Odoo 16 and Odoo 18.
         """
+        import inspect
+        
         result = {}
-
         rental_lines = self.filtered(lambda l: l.order_id.is_recurring_rental)
         normal_lines = self - rental_lines
-
-        # -------------------------------
+        
         # Rental orders → NO subscription logic
-        # -------------------------------
         if rental_lines:
             _logger.info(
                 "Skipping subscription qty invoiced for rental lines %s",
@@ -961,18 +953,32 @@ class SaleOrderLine(models.Model):
             )
             for line in rental_lines:
                 result[line.id] = 0.0
-
-        # -------------------------------
+        
         # Normal subscription orders
-        # -------------------------------
         if normal_lines:
-            result.update(
-                super(SaleOrderLine, normal_lines)._get_subscription_qty_invoiced(
-                    last_invoiced_date=last_invoiced_date,
-                    next_invoice_date=next_invoice_date,
-                )
-            )
-
+            # Get parent method and check its signature
+            parent_method = super(SaleOrderLine, normal_lines)._get_subscription_qty_invoiced
+            
+            try:
+                sig = inspect.signature(parent_method)
+                # Count parameters excluding 'self'
+                param_count = len([p for p in sig.parameters.values() if p.name != 'self'])
+                
+                if param_count >= 2:
+                    # Odoo 16 style - accepts parameters
+                    result.update(
+                        parent_method(
+                            last_invoiced_date=last_invoiced_date,
+                            next_invoice_date=next_invoice_date,
+                        )
+                    )
+                else:
+                    # Odoo 18 style - no parameters
+                    result.update(parent_method())
+            except Exception as e:
+                _logger.error("Error calling parent method: %s. Using no-param fallback.", e)
+                result.update(parent_method())
+        
         return result
     
     def _get_deferred_date(self, last_invoiced_date=None, next_invoice_date=None):
